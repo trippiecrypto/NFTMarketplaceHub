@@ -1,0 +1,76 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+
+contract NFTMarketplaceHub is IERC721Receiver, Ownable {
+    using Counters for Counters.Counter;
+
+    struct Listing {
+        uint256 id;
+        address nftContract;
+        uint256 tokenId;
+        address seller;
+        uint256 price;
+        bool sold;
+    }
+
+    Counters.Counter private _listingIdCounter;
+    mapping(uint256 => Listing) public listings;
+
+    event NFTListed(uint256 indexed id, address indexed nftContract, uint256 indexed tokenId, address seller, uint256 price);
+    event NFTSold(uint256 indexed id, address indexed nftContract, uint256 indexed tokenId, address seller, address buyer, uint256 price);
+    event ListingCancelled(uint256 indexed id, address indexed nftContract, uint256 indexed tokenId, address seller);
+
+    function listNFT(address nftContract, uint256 tokenId, uint256 price) external {
+        require(price > 0, "Price must be greater than zero");
+
+        IERC721(nftContract).safeTransferFrom(msg.sender, address(this), tokenId);
+
+        _listingIdCounter.increment();
+        uint256 listingId = _listingIdCounter.current();
+
+        listings[listingId] = Listing(listingId, nftContract, tokenId, msg.sender, price, false);
+
+        emit NFTListed(listingId, nftContract, tokenId, msg.sender, price);
+    }
+
+    function buyNFT(uint256 listingId) external payable {
+        Listing storage listing = listings[listingId];
+        require(listing.id == listingId, "Listing does not exist");
+        require(!listing.sold, "NFT already sold");
+        require(msg.value >= listing.price, "Insufficient funds");
+
+        listing.sold = true;
+
+        IERC721(listing.nftContract).safeTransferFrom(address(this), msg.sender, listing.tokenId);
+        payable(listing.seller).transfer(listing.price);
+
+        emit NFTSold(listingId, listing.nftContract, listing.tokenId, listing.seller, msg.sender, listing.price);
+    }
+
+    function cancelListing(uint256 listingId) external {
+        Listing storage listing = listings[listingId];
+        require(listing.id == listingId, "Listing does not exist");
+        require(listing.seller == msg.sender, "Only seller can cancel listing");
+        require(!listing.sold, "Cannot cancel sold listing");
+
+        IERC721(listing.nftContract).safeTransferFrom(address(this), listing.seller, listing.tokenId);
+
+        delete listings[listingId];
+
+        emit ListingCancelled(listingId, listing.nftContract, listing.tokenId, listing.seller);
+    }
+
+    function onERC721Received(
+        address operator,
+        address from,
+        uint256 tokenId,
+        bytes calldata data
+    ) external override returns (bytes4) {
+        return this.onERC721Received.selector;
+    }
+}
